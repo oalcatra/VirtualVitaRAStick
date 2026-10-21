@@ -11,8 +11,6 @@ endif()
 project(VirtualVitaRAStick C)
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
-# Match established VitaSDK kernel plugins: keep relocations and avoid the
-# normal application startup/runtime.
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -O2 -std=gnu99 -nostdlib")
 
 add_executable(${PROJECT_NAME}
@@ -22,6 +20,8 @@ add_executable(${PROJECT_NAME}
 target_compile_definitions(${PROJECT_NAME} PRIVATE __VITA_KERNEL__)
 
 target_link_libraries(${PROJECT_NAME}
+  SceCtrlForDriver_stub
+  SceTouchForDriver_stub
   SceThreadmgrForDriver_stub
   SceSysmemForDriver_stub
   taihenForKernel_stub
