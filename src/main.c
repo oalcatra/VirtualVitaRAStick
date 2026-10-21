@@ -16,11 +16,11 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define NID_PEEK_NEG 0x19895843
 #define NID_READ_NEG 0x8D4E0DD1
 
-/* Diagnostic build: test only the PositiveExt family on top of the known-good
+/* Diagnostic build: test only the PositiveExt2 family on top of the known-good
  * positive/negative export hooks. These offsets target SceCtrl on firmware
  * 3.60 and are optional so failure to install them cannot disable the plugin. */
-#define OFF_PEEK_POS_EXT 0x3928
-#define OFF_READ_POS_EXT 0x3BCC
+#define OFF_PEEK_POS_EXT2 0x4B48
+#define OFF_READ_POS_EXT2 0x4E14
 
 static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1, -1, -1, -1, -1};
 static tai_hook_ref_t ctrl_hook_ref[CTRL_HOOKS];
@@ -97,8 +97,8 @@ DECL_CTRL_HOOK(ctrl_peek_positive_patched, 0)
 DECL_CTRL_HOOK(ctrl_read_positive_patched, 1)
 DECL_CTRL_HOOK(ctrl_peek_negative_patched, 2)
 DECL_CTRL_HOOK(ctrl_read_negative_patched, 3)
-DECL_CTRL_HOOK(ctrl_peek_positive_ext_patched, 4)
-DECL_CTRL_HOOK(ctrl_read_positive_ext_patched, 5)
+DECL_CTRL_HOOK(ctrl_peek_positive_ext2_patched, 4)
+DECL_CTRL_HOOK(ctrl_read_positive_ext2_patched, 5)
 
 static void release_hooks(void) {
     for (int i = 0; i < CTRL_HOOKS; i++) {
@@ -130,8 +130,8 @@ int module_start(SceSize argc, const void *args) {
         }
     }
 
-    ctrl_hook_uid[4] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[4], mod_info.modid, 0, OFF_PEEK_POS_EXT | 1, 1, ctrl_peek_positive_ext_patched);
-    ctrl_hook_uid[5] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[5], mod_info.modid, 0, OFF_READ_POS_EXT | 1, 1, ctrl_read_positive_ext_patched);
+    ctrl_hook_uid[4] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[4], mod_info.modid, 0, OFF_PEEK_POS_EXT2 | 1, 1, ctrl_peek_positive_ext2_patched);
+    ctrl_hook_uid[5] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[5], mod_info.modid, 0, OFF_READ_POS_EXT2 | 1, 1, ctrl_read_positive_ext2_patched);
 
     return SCE_KERNEL_START_SUCCESS;
 }
