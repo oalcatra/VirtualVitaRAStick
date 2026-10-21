@@ -8,20 +8,24 @@
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 /*
- * VirtualVitaRAStick - first functional prototype
+ * VirtualVitaRAStick
  *
  * The right half of the front touchscreen acts as a floating right analog
  * stick. The first touch becomes the stick center; movement around that point
  * is mapped to rx/ry. Releasing the finger returns the stick to center.
+ *
+ * Coexistence note: reVita hooks these same SceCtrl exports. We always call
+ * TAI_CONTINUE first and apply only our right-stick override afterwards. This
+ * keeps every other field exactly as produced by the rest of the hook chain.
  */
 
 #define CTRL_HOOKS 2
 #define TOUCH_CENTER 128
-#define TOUCH_RADIUS 320
+#define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
 
-/* SceCtrlForDriver export NIDs used by reVita/8BitVita for the kernel
- * positive controller functions. */
+/* SceCtrlForDriver export NIDs used by reVita for the kernel positive
+ * controller functions. */
 #define NID_KSCE_CTRL_PEEK_BUFFER_POSITIVE 0xEA1D3A34
 #define NID_KSCE_CTRL_READ_BUFFER_POSITIVE 0x9B96A1AA
 
@@ -46,13 +50,13 @@ static void reset_virtual_stick(void) {
     stick_ry = TOUCH_CENTER;
 }
 
-static void update_virtual_stick(void) {
+static int update_virtual_stick(void) {
     SceTouchData touch;
     int ret = ksceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
 
     if (ret <= 0 || touch.reportNum == 0) {
         reset_virtual_stick();
-        return;
+        return 0;
     }
 
     const SceTouchReport *report = NULL;
@@ -65,7 +69,7 @@ static void update_virtual_stick(void) {
 
     if (report == NULL) {
         reset_virtual_stick();
-        return;
+        return 0;
     }
 
     if (!stick_active) {
@@ -79,10 +83,15 @@ static void update_virtual_stick(void) {
 
     stick_rx = (unsigned char)clamp_int(TOUCH_CENTER + (dx * 127) / TOUCH_RADIUS, 0, 255);
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
+    return 1;
 }
 
 static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
-    update_virtual_stick();
+    /* Only override rx/ry while our touch stick is actually active.
+     * When idle, leave the previous hook's data untouched. This is important
+     * for coexistence with reVita and also preserves the physical right stick. */
+    if (!update_virtual_stick())
+        return;
 
     for (int i = 0; i < count; i++) {
         pad_data[i].rx = stick_rx;
