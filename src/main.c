@@ -5,7 +5,8 @@
 
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
-#define CTRL_HOOKS 4
+#define CTRL_HOOKS 8
+#define REQUIRED_HOOKS 4
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
@@ -15,7 +16,15 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define NID_PEEK_NEG 0x19895843
 #define NID_READ_NEG 0x8D4E0DD1
 
-static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1, -1, -1};
+/* Public SceCtrl exports used by controller-2/extended paths. Unlike the old
+ * firmware offsets we tested, these NIDs are stable exports and can coexist
+ * with another taiHEN hook such as reVita. */
+#define NID_PEEK_POS_2 0x15F81E8C
+#define NID_READ_POS_2 0xC4226A3E
+#define NID_PEEK_POS_EXT2 0x860BF292
+#define NID_READ_POS_EXT2 0xA7178860
+
+static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1, -1, -1, -1, -1, -1, -1};
 static tai_hook_ref_t ctrl_hook_ref[CTRL_HOOKS];
 
 static int stick_active = 0;
@@ -75,10 +84,6 @@ static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
     update_virtual_stick();
 
     for (int i = 0; i < count; i++) {
-        /* This intentionally runs after TAI_CONTINUE. reVita and every other
-         * hook earlier in the chain may remap buttons/left stick first; our
-         * plugin then owns only the final right-stick pair. When touch is idle
-         * this also guarantees the missing physical right stick is neutral. */
         pad_data[i].rx = stick_rx;
         pad_data[i].ry = stick_ry;
     }
@@ -95,6 +100,10 @@ DECL_CTRL_HOOK(ctrl_peek_positive_patched, 0)
 DECL_CTRL_HOOK(ctrl_read_positive_patched, 1)
 DECL_CTRL_HOOK(ctrl_peek_negative_patched, 2)
 DECL_CTRL_HOOK(ctrl_read_negative_patched, 3)
+DECL_CTRL_HOOK(ctrl_peek_positive2_patched, 4)
+DECL_CTRL_HOOK(ctrl_read_positive2_patched, 5)
+DECL_CTRL_HOOK(ctrl_peek_positive_ext2_patched, 6)
+DECL_CTRL_HOOK(ctrl_read_positive_ext2_patched, 7)
 
 static void release_hooks(void) {
     for (int i = 0; i < CTRL_HOOKS; i++) {
@@ -114,12 +123,19 @@ int module_start(SceSize argc, const void *args) {
     ctrl_hook_uid[2] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[2], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_NEG, ctrl_peek_negative_patched);
     ctrl_hook_uid[3] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[3], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_NEG, ctrl_read_negative_patched);
 
-    for (int i = 0; i < CTRL_HOOKS; i++) {
+    for (int i = 0; i < REQUIRED_HOOKS; i++) {
         if (ctrl_hook_uid[i] < 0) {
             release_hooks();
             return SCE_KERNEL_START_FAILED;
         }
     }
+
+    /* Best-effort hooks for the alternate controller APIs reVita also handles.
+     * Failure of one of these must never disable the known-good core plugin. */
+    ctrl_hook_uid[4] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[4], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS_2, ctrl_peek_positive2_patched);
+    ctrl_hook_uid[5] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[5], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS_2, ctrl_read_positive2_patched);
+    ctrl_hook_uid[6] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[6], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS_EXT2, ctrl_peek_positive_ext2_patched);
+    ctrl_hook_uid[7] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[7], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS_EXT2, ctrl_read_positive_ext2_patched);
 
     return SCE_KERNEL_START_SUCCESS;
 }
