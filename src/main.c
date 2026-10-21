@@ -11,11 +11,6 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define NID_PEEK_POSITIVE 0xEA1D3A34
 #define NID_READ_POSITIVE 0x9B96A1AA
-
-/* SceCtrl internal offsets used by reVita/8BitVita. Unlike the exported
- * three-argument wrappers, these internal Positive2 functions receive a
- * fourth `triggers` argument. Our earlier offset experiments did not mirror
- * that calling convention correctly. */
 #define OFF_PEEK_POSITIVE2 0x3EF8
 #define OFF_READ_POSITIVE2 0x449C
 
@@ -75,39 +70,49 @@ static void update_virtual_stick(void) {
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
 }
 
-static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
-    update_virtual_stick();
+/* Only writes the already-computed virtual stick. This is important because
+ * Positive2 can be reached from inside the normal Positive path: sampling the
+ * touchscreen independently in every nested hook could reset/recenter the
+ * virtual stick before the outer hook returns. */
+static void write_virtual_stick(SceCtrlData *pad_data, int count) {
+    if (pad_data == NULL || count <= 0)
+        return;
+
     for (int i = 0; i < count; i++) {
         pad_data[i].rx = stick_rx;
         pad_data[i].ry = stick_ry;
     }
 }
 
-/* Known-good Build #15 export hooks. */
 static int peek_positive_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[0], port, pad_data, count);
-    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
     return ret;
 }
 
 static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[1], port, pad_data, count);
-    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
     return ret;
 }
 
-/* Positive2 internal wrappers. The hook callback itself has the public-style
- * three arguments, but the original internal function is continued with the
- * extra trigger flag exactly as 8BitVita does. */
+/* Positive2 is an internal path. Keep the same virtual-stick state computed by
+ * the outer/public path instead of reading touch again from a nested hook. */
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
-    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    if (ret > 0) write_virtual_stick(pad_data, ret);
     return ret;
 }
 
 static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[3], port, pad_data, count, 1);
-    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    if (ret > 0) write_virtual_stick(pad_data, ret);
     return ret;
 }
 
@@ -126,7 +131,6 @@ int module_start(SceSize argc, const void *args) {
 
     reset_virtual_stick();
 
-    /* First install only the two hooks already proven on Alcatra's hardware. */
     hook_uid[0] = taiHookFunctionExportForKernel(
         KERNEL_PID, &hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY,
         NID_PEEK_POSITIVE, peek_positive_hook);
@@ -144,9 +148,6 @@ int module_start(SceSize argc, const void *args) {
     ctrl_info.size = sizeof(ctrl_info);
 
     if (taiGetModuleInfoForKernel(KERNEL_PID, "SceCtrl", &ctrl_info) >= 0) {
-        /* These are deliberately optional. If either internal hook cannot be
-         * installed, keep the known-good export hooks alive rather than making
-         * the entire plugin fail to load. */
         hook_uid[2] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[2], ctrl_info.modid, 0,
             OFF_PEEK_POSITIVE2, 1, peek_positive2_hook);
