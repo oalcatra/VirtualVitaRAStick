@@ -1,22 +1,32 @@
 #include <vitasdkkern.h>
 #include <psp2kern/ctrl.h>
 #include <psp2/touch.h>
+#include <taihen.h>
 
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
-#define ANALOG_EMU_SLOT 0
-#define ANALOG_EMU_DURATION 2
+
+#define NID_PEEK_POSITIVE 0xEA1D3A34
+#define NID_READ_POSITIVE 0x9B96A1AA
+
+/* SceCtrl internal offsets used by reVita/8BitVita. Unlike the exported
+ * three-argument wrappers, these internal Positive2 functions receive a
+ * fourth `triggers` argument. Our earlier offset experiments did not mirror
+ * that calling convention correctly. */
+#define OFF_PEEK_POSITIVE2 0x3EF8
+#define OFF_READ_POSITIVE2 0x449C
+
+static SceUID hook_uid[4] = {-1, -1, -1, -1};
+static tai_hook_ref_t hook_ref[4];
 
 static int stick_active = 0;
 static int stick_center_x = 0;
 static int stick_center_y = 0;
 static unsigned char stick_rx = TOUCH_CENTER;
 static unsigned char stick_ry = TOUCH_CENTER;
-static SceUID worker_uid = -1;
-static volatile int worker_run = 1;
 
 static int clamp_int(int value, int min_value, int max_value) {
     if (value < min_value) return min_value;
@@ -65,57 +75,85 @@ static void update_virtual_stick(void) {
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
 }
 
-static void apply_analog_emulation(void) {
-    /* Keep the physical left stick untouched by mirroring its neutral value in
-     * the emulation fields. The right pair is supplied for both user and kernel
-     * consumers so games using different SceCtrl read paths see the same stick. */
-    ksceCtrlSetAnalogEmulation(
-        0,
-        ANALOG_EMU_SLOT,
-        TOUCH_CENTER, TOUCH_CENTER, stick_rx, stick_ry,
-        TOUCH_CENTER, TOUCH_CENTER, stick_rx, stick_ry,
-        ANALOG_EMU_DURATION
-    );
+static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
+    update_virtual_stick();
+    for (int i = 0; i < count; i++) {
+        pad_data[i].rx = stick_rx;
+        pad_data[i].ry = stick_ry;
+    }
 }
 
-static int analog_worker(SceSize args, void *argp) {
-    (void)args;
-    (void)argp;
+/* Known-good Build #15 export hooks. */
+static int peek_positive_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[0], port, pad_data, count);
+    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    return ret;
+}
 
-    while (worker_run) {
-        update_virtual_stick();
-        apply_analog_emulation();
-        ksceKernelDelayThread(4000);
+static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[1], port, pad_data, count);
+    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    return ret;
+}
+
+/* Positive2 internal wrappers. The hook callback itself has the public-style
+ * three arguments, but the original internal function is continued with the
+ * extra trigger flag exactly as 8BitVita does. */
+static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
+    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    return ret;
+}
+
+static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[3], port, pad_data, count, 1);
+    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    return ret;
+}
+
+static void release_hooks(void) {
+    for (int i = 0; i < 4; i++) {
+        if (hook_uid[i] >= 0) {
+            taiHookReleaseForKernel(hook_uid[i], hook_ref[i]);
+            hook_uid[i] = -1;
+        }
     }
-
-    return 0;
 }
 
 int module_start(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
 
-    worker_run = 1;
     reset_virtual_stick();
 
-    worker_uid = ksceKernelCreateThread(
-        "VirtualVitaRAStick",
-        analog_worker,
-        0x60,
-        0x1000,
-        0,
-        0,
-        NULL
-    );
+    /* First install only the two hooks already proven on Alcatra's hardware. */
+    hook_uid[0] = taiHookFunctionExportForKernel(
+        KERNEL_PID, &hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY,
+        NID_PEEK_POSITIVE, peek_positive_hook);
 
-    if (worker_uid < 0)
-        return SCE_KERNEL_START_FAILED;
+    hook_uid[1] = taiHookFunctionExportForKernel(
+        KERNEL_PID, &hook_ref[1], "SceCtrl", TAI_ANY_LIBRARY,
+        NID_READ_POSITIVE, read_positive_hook);
 
-    int ret = ksceKernelStartThread(worker_uid, 0, NULL);
-    if (ret < 0) {
-        ksceKernelDeleteThread(worker_uid);
-        worker_uid = -1;
+    if (hook_uid[0] < 0 || hook_uid[1] < 0) {
+        release_hooks();
         return SCE_KERNEL_START_FAILED;
+    }
+
+    tai_module_info_t ctrl_info;
+    ctrl_info.size = sizeof(ctrl_info);
+
+    if (taiGetModuleInfoForKernel(KERNEL_PID, "SceCtrl", &ctrl_info) >= 0) {
+        /* These are deliberately optional. If either internal hook cannot be
+         * installed, keep the known-good export hooks alive rather than making
+         * the entire plugin fail to load. */
+        hook_uid[2] = taiHookFunctionOffsetForKernel(
+            KERNEL_PID, &hook_ref[2], ctrl_info.modid, 0,
+            OFF_PEEK_POSITIVE2, 1, peek_positive2_hook);
+
+        hook_uid[3] = taiHookFunctionOffsetForKernel(
+            KERNEL_PID, &hook_ref[3], ctrl_info.modid, 0,
+            OFF_READ_POSITIVE2, 1, read_positive2_hook);
     }
 
     return SCE_KERNEL_START_SUCCESS;
@@ -124,18 +162,7 @@ int module_start(SceSize argc, const void *args) {
 int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
-
-    worker_run = 0;
-
-    if (worker_uid >= 0) {
-        ksceKernelWaitThreadEnd(worker_uid, NULL, NULL);
-        ksceKernelDeleteThread(worker_uid);
-        worker_uid = -1;
-    }
-
-    reset_virtual_stick();
-    apply_analog_emulation();
-
+    release_hooks();
     return SCE_KERNEL_STOP_SUCCESS;
 }
 
