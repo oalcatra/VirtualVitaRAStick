@@ -23,17 +23,20 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
  * controller field exactly as produced by the rest of the hook chain.
  */
 
-#define CTRL_HOOKS 2
+#define CTRL_HOOKS 4
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
 
-/* SceCtrlForDriver export NIDs used by reVita for the kernel positive
- * controller functions. */
+/* SceCtrlForDriver export NIDs used by reVita for the kernel positive and
+ * negative controller functions. Some games use the negative variants, so
+ * all four paths must receive the same virtual right-stick data. */
 #define NID_KSCE_CTRL_PEEK_BUFFER_POSITIVE 0xEA1D3A34
 #define NID_KSCE_CTRL_READ_BUFFER_POSITIVE 0x9B96A1AA
+#define NID_KSCE_CTRL_PEEK_BUFFER_NEGATIVE 0x19895843
+#define NID_KSCE_CTRL_READ_BUFFER_NEGATIVE 0x8D4E0DD1
 
-static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1};
+static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1, -1, -1};
 static tai_hook_ref_t ctrl_hook_ref[CTRL_HOOKS];
 
 static int stick_active = 0;
@@ -91,10 +94,6 @@ static int update_virtual_stick(void) {
 }
 
 static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
-    /* Always own the right-stick axes. If touch is idle, update_virtual_stick()
-     * resets them to 128/128, neutralizing any drift/noise from a missing or
-     * broken physical right stick. While touch is active, stick_rx/stick_ry
-     * contain the virtual-stick position. */
     update_virtual_stick();
 
     for (int i = 0; i < count; i++) {
@@ -115,34 +114,46 @@ static int ctrl_read_positive_patched(int port, SceCtrlData *pad_data, int count
     return ret;
 }
 
+static int ctrl_peek_negative_patched(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, ctrl_hook_ref[2], port, pad_data, count);
+    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    return ret;
+}
+
+static int ctrl_read_negative_patched(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, ctrl_hook_ref[3], port, pad_data, count);
+    if (ret > 0) patch_ctrl_data(pad_data, ret);
+    return ret;
+}
+
 int module_start(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
 
     ctrl_hook_uid[0] = taiHookFunctionExportForKernel(
-        KERNEL_PID,
-        &ctrl_hook_ref[0],
-        "SceCtrl",
-        TAI_ANY_LIBRARY,
-        NID_KSCE_CTRL_PEEK_BUFFER_POSITIVE,
-        ctrl_peek_positive_patched
-    );
+        KERNEL_PID, &ctrl_hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY,
+        NID_KSCE_CTRL_PEEK_BUFFER_POSITIVE, ctrl_peek_positive_patched);
 
     ctrl_hook_uid[1] = taiHookFunctionExportForKernel(
-        KERNEL_PID,
-        &ctrl_hook_ref[1],
-        "SceCtrl",
-        TAI_ANY_LIBRARY,
-        NID_KSCE_CTRL_READ_BUFFER_POSITIVE,
-        ctrl_read_positive_patched
-    );
+        KERNEL_PID, &ctrl_hook_ref[1], "SceCtrl", TAI_ANY_LIBRARY,
+        NID_KSCE_CTRL_READ_BUFFER_POSITIVE, ctrl_read_positive_patched);
 
-    if (ctrl_hook_uid[0] < 0 || ctrl_hook_uid[1] < 0) {
-        if (ctrl_hook_uid[0] >= 0)
-            taiHookReleaseForKernel(ctrl_hook_uid[0], ctrl_hook_ref[0]);
-        if (ctrl_hook_uid[1] >= 0)
-            taiHookReleaseForKernel(ctrl_hook_uid[1], ctrl_hook_ref[1]);
-        return SCE_KERNEL_START_FAILED;
+    ctrl_hook_uid[2] = taiHookFunctionExportForKernel(
+        KERNEL_PID, &ctrl_hook_ref[2], "SceCtrl", TAI_ANY_LIBRARY,
+        NID_KSCE_CTRL_PEEK_BUFFER_NEGATIVE, ctrl_peek_negative_patched);
+
+    ctrl_hook_uid[3] = taiHookFunctionExportForKernel(
+        KERNEL_PID, &ctrl_hook_ref[3], "SceCtrl", TAI_ANY_LIBRARY,
+        NID_KSCE_CTRL_READ_BUFFER_NEGATIVE, ctrl_read_negative_patched);
+
+    for (int i = 0; i < CTRL_HOOKS; i++) {
+        if (ctrl_hook_uid[i] < 0) {
+            for (int j = 0; j < CTRL_HOOKS; j++) {
+                if (ctrl_hook_uid[j] >= 0)
+                    taiHookReleaseForKernel(ctrl_hook_uid[j], ctrl_hook_ref[j]);
+            }
+            return SCE_KERNEL_START_FAILED;
+        }
     }
 
     return SCE_KERNEL_START_SUCCESS;
