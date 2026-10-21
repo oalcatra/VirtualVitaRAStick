@@ -131,7 +131,8 @@ int module_start(SceSize argc, const void *args) {
     }
 
     /* Best-effort hooks for the alternate controller APIs reVita also handles.
-     * Failure of one of these must never disable the known-good core plugin. */
+     * Failure of one of these must never disable the known-good core plugin.
+     * Kept optional so the stable four-hook path remains the fallback. */
     ctrl_hook_uid[4] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[4], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS_2, ctrl_peek_positive2_patched);
     ctrl_hook_uid[5] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[5], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS_2, ctrl_read_positive2_patched);
     ctrl_hook_uid[6] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[6], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS_EXT2, ctrl_peek_positive_ext2_patched);
