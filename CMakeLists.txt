@@ -11,15 +11,15 @@ endif()
 project(VirtualVitaRAStick C)
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
-# Kernel plugins do not use the normal Vita application crt0/main entrypoint.
-# Keep -nostdlib on the compiler/link command and retain relocations for
-# vita-elf-create.
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -std=gnu99 -nostdlib -Wl,-q")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -std=gnu99")
 
-# The bootstrap currently has no actual imported Vita functions. vita-elf-create
-# normally rejects an ELF with no .vitalink import stubs; -n explicitly allows
-# empty imports. Once the plugin starts using SceTouch/SceCtrl/taiHEN APIs this
-# can be removed if import stubs are present.
+# This bootstrap is a kernel module, not a normal application with crt0/main.
+# Keep the standard startup/runtime out of the link, but explicitly preserve
+# relocation information for vita-elf-create.
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -Wl,-q")
+
+# The bootstrap currently imports no Vita APIs yet, so allow an empty import
+# table. We can remove -n once SceTouch/SceCtrl/taiHEN imports are actually used.
 set(VITA_ELF_CREATE_FLAGS "${VITA_ELF_CREATE_FLAGS} -n")
 
 add_executable(${PROJECT_NAME}
