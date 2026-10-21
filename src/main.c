@@ -11,19 +11,21 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define NID_PEEK_POSITIVE 0xEA1D3A34
 #define NID_READ_POSITIVE 0x9B96A1AA
+
+/* Internal SceCtrl paths used by 8BitVita. */
+#define OFF_PEEK_POSITIVE_EXT 0x3928
+#define OFF_READ_POSITIVE_EXT 0x3BCC
 #define OFF_PEEK_POSITIVE2 0x3EF8
 #define OFF_READ_POSITIVE2 0x449C
 
-static SceUID hook_uid[4] = {-1, -1, -1, -1};
-static tai_hook_ref_t hook_ref[4];
-static SceUID touch_thread_uid = -1;
-static volatile int touch_thread_run = 0;
+static SceUID hook_uid[6] = {-1, -1, -1, -1, -1, -1};
+static tai_hook_ref_t hook_ref[6];
 
 static int stick_active = 0;
 static int stick_center_x = 0;
 static int stick_center_y = 0;
-static volatile unsigned char stick_rx = TOUCH_CENTER;
-static volatile unsigned char stick_ry = TOUCH_CENTER;
+static unsigned char stick_rx = TOUCH_CENTER;
+static unsigned char stick_ry = TOUCH_CENTER;
 
 static int clamp_int(int value, int min_value, int max_value) {
     if (value < min_value) return min_value;
@@ -72,46 +74,35 @@ static void update_virtual_stick(void) {
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
 }
 
-/* Sample touch independently from SceCtrl. This lets games that call the
- * internal Positive2 path directly receive fresh touch state, while avoiding
- * multiple touch reads when one SceCtrl path calls another internally. */
-static int touch_thread(SceSize args, void *argp) {
-    (void)args;
-    (void)argp;
-
-    while (touch_thread_run) {
-        update_virtual_stick();
-        ksceKernelDelayThread(2000);
-    }
-
-    return 0;
-}
-
 static void write_virtual_stick(SceCtrlData *pad_data, int count) {
-    if (pad_data == NULL || count <= 0)
-        return;
-
-    unsigned char rx = stick_rx;
-    unsigned char ry = stick_ry;
+    if (pad_data == NULL || count <= 0) return;
 
     for (int i = 0; i < count; i++) {
-        pad_data[i].rx = rx;
-        pad_data[i].ry = ry;
+        pad_data[i].rx = stick_rx;
+        pad_data[i].ry = stick_ry;
     }
 }
 
+/* Build #32 baseline: these public hooks are responsible for refreshing touch. */
 static int peek_positive_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[0], port, pad_data, count);
-    if (ret > 0) write_virtual_stick(pad_data, ret);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
     return ret;
 }
 
 static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[1], port, pad_data, count);
-    if (ret > 0) write_virtual_stick(pad_data, ret);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
     return ret;
 }
 
+/* Positive2 uses triggers=1 in 8BitVita. Preserve the known-good #32 behavior. */
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
     if (ret > 0) write_virtual_stick(pad_data, ret);
@@ -124,21 +115,32 @@ static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
+/* New experiment: PositiveExt uses triggers=0. Refresh touch here because a game
+ * may call this path directly without passing through the normal Positive hooks. */
+static int peek_positive_ext_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[4], port, pad_data, count, 0);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
+    return ret;
+}
+
+static int read_positive_ext_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[5], port, pad_data, count, 0);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
+    return ret;
+}
+
 static void release_hooks(void) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         if (hook_uid[i] >= 0) {
             taiHookReleaseForKernel(hook_uid[i], hook_ref[i]);
             hook_uid[i] = -1;
         }
-    }
-}
-
-static void stop_touch_thread(void) {
-    if (touch_thread_uid >= 0) {
-        touch_thread_run = 0;
-        ksceKernelWaitThreadEnd(touch_thread_uid, NULL, NULL);
-        ksceKernelDeleteThread(touch_thread_uid);
-        touch_thread_uid = -1;
     }
 }
 
@@ -172,24 +174,14 @@ int module_start(SceSize argc, const void *args) {
         hook_uid[3] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[3], ctrl_info.modid, 0,
             OFF_READ_POSITIVE2, 1, read_positive2_hook);
-    }
 
-    touch_thread_uid = ksceKernelCreateThread(
-        "VirtualVitaRAStickTouch", touch_thread,
-        0x40, 0x1000, 0, 0, NULL);
+        hook_uid[4] = taiHookFunctionOffsetForKernel(
+            KERNEL_PID, &hook_ref[4], ctrl_info.modid, 0,
+            OFF_PEEK_POSITIVE_EXT, 1, peek_positive_ext_hook);
 
-    if (touch_thread_uid < 0) {
-        release_hooks();
-        return SCE_KERNEL_START_FAILED;
-    }
-
-    touch_thread_run = 1;
-    if (ksceKernelStartThread(touch_thread_uid, 0, NULL) < 0) {
-        touch_thread_run = 0;
-        ksceKernelDeleteThread(touch_thread_uid);
-        touch_thread_uid = -1;
-        release_hooks();
-        return SCE_KERNEL_START_FAILED;
+        hook_uid[5] = taiHookFunctionOffsetForKernel(
+            KERNEL_PID, &hook_ref[5], ctrl_info.modid, 0,
+            OFF_READ_POSITIVE_EXT, 1, read_positive_ext_hook);
     }
 
     return SCE_KERNEL_START_SUCCESS;
@@ -198,7 +190,6 @@ int module_start(SceSize argc, const void *args) {
 int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
-    stop_touch_thread();
     release_hooks();
     return SCE_KERNEL_STOP_SUCCESS;
 }
