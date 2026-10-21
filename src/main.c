@@ -6,6 +6,7 @@
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define CTRL_HOOKS 12
+#define CORE_HOOKS 4
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
@@ -15,8 +16,9 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define NID_PEEK_NEG 0x19895843
 #define NID_READ_NEG 0x8D4E0DD1
 
-/* SceCtrl 3.60 offsets used by reVita/vixen for controller variants that are
- * not exported through the normal kernel stub. */
+/* Extended SceCtrl paths. These offsets are firmware/module-layout sensitive,
+ * so unlike the four exported core hooks they are best-effort: failure to
+ * install one must NOT disable the whole plugin. */
 #define OFF_PEEK_POS_EXT   0x3928
 #define OFF_READ_POS_EXT   0x3BCC
 #define OFF_PEEK_POS_2     0x3EF8
@@ -126,30 +128,35 @@ int module_start(SceSize argc, const void *args) {
     for (int i = 0; i < CTRL_HOOKS; i++)
         ctrl_hook_uid[i] = -1;
 
-    tai_module_info_t mod_info;
-    mod_info.size = sizeof(tai_module_info_t);
-    if (taiGetModuleInfoForKernel(KERNEL_PID, "SceCtrl", &mod_info) < 0)
-        return SCE_KERNEL_START_FAILED;
-
+    /* The four exported hooks are our known-good baseline and are required. */
     ctrl_hook_uid[0] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS, ctrl_peek_positive_patched);
     ctrl_hook_uid[1] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[1], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS, ctrl_read_positive_patched);
     ctrl_hook_uid[2] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[2], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_NEG, ctrl_peek_negative_patched);
     ctrl_hook_uid[3] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[3], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_NEG, ctrl_read_negative_patched);
 
-    ctrl_hook_uid[4] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[4], mod_info.modid, 0, OFF_PEEK_POS_EXT | 1, 1, ctrl_peek_positive_ext_patched);
-    ctrl_hook_uid[5] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[5], mod_info.modid, 0, OFF_READ_POS_EXT | 1, 1, ctrl_read_positive_ext_patched);
-    ctrl_hook_uid[6] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[6], mod_info.modid, 0, OFF_PEEK_POS_2 | 1, 1, ctrl_peek_positive2_patched);
-    ctrl_hook_uid[7] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[7], mod_info.modid, 0, OFF_READ_POS_2 | 1, 1, ctrl_read_positive2_patched);
-    ctrl_hook_uid[8] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[8], mod_info.modid, 0, OFF_PEEK_NEG_2 | 1, 1, ctrl_peek_negative2_patched);
-    ctrl_hook_uid[9] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[9], mod_info.modid, 0, OFF_READ_NEG_2 | 1, 1, ctrl_read_negative2_patched);
-    ctrl_hook_uid[10] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[10], mod_info.modid, 0, OFF_PEEK_POS_EXT_2 | 1, 1, ctrl_peek_positive_ext2_patched);
-    ctrl_hook_uid[11] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[11], mod_info.modid, 0, OFF_READ_POS_EXT_2 | 1, 1, ctrl_read_positive_ext2_patched);
-
-    for (int i = 0; i < CTRL_HOOKS; i++) {
+    for (int i = 0; i < CORE_HOOKS; i++) {
         if (ctrl_hook_uid[i] < 0) {
             release_hooks();
             return SCE_KERNEL_START_FAILED;
         }
+    }
+
+    /* The extended variants are intentionally optional. Build #18 treated
+     * every offset hook as mandatory; if even one offset was unavailable,
+     * module_start released the working hooks and failed, making the virtual
+     * stick disappear completely. Keep the baseline alive and install each
+     * extra path only when it is valid on this SceCtrl module. */
+    tai_module_info_t mod_info;
+    mod_info.size = sizeof(tai_module_info_t);
+    if (taiGetModuleInfoForKernel(KERNEL_PID, "SceCtrl", &mod_info) >= 0) {
+        ctrl_hook_uid[4] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[4], mod_info.modid, 0, OFF_PEEK_POS_EXT | 1, 1, ctrl_peek_positive_ext_patched);
+        ctrl_hook_uid[5] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[5], mod_info.modid, 0, OFF_READ_POS_EXT | 1, 1, ctrl_read_positive_ext_patched);
+        ctrl_hook_uid[6] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[6], mod_info.modid, 0, OFF_PEEK_POS_2 | 1, 1, ctrl_peek_positive2_patched);
+        ctrl_hook_uid[7] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[7], mod_info.modid, 0, OFF_READ_POS_2 | 1, 1, ctrl_read_positive2_patched);
+        ctrl_hook_uid[8] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[8], mod_info.modid, 0, OFF_PEEK_NEG_2 | 1, 1, ctrl_peek_negative2_patched);
+        ctrl_hook_uid[9] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[9], mod_info.modid, 0, OFF_READ_NEG_2 | 1, 1, ctrl_read_negative2_patched);
+        ctrl_hook_uid[10] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[10], mod_info.modid, 0, OFF_PEEK_POS_EXT_2 | 1, 1, ctrl_peek_positive_ext2_patched);
+        ctrl_hook_uid[11] = taiHookFunctionOffsetForKernel(KERNEL_PID, &ctrl_hook_ref[11], mod_info.modid, 0, OFF_READ_POS_EXT_2 | 1, 1, ctrl_read_positive_ext2_patched);
     }
 
     return SCE_KERNEL_START_SUCCESS;
