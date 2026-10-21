@@ -3,11 +3,8 @@
 #include <psp2/touch.h>
 #include <taihen.h>
 
-/*
- * VitaSDK currently exposes the touch data structures/constants in the user
- * header, while SceTouchForDriver still provides the kernel driver import.
- * This prototype mirrors the approach used by reVita's VitaSDK extensions.
- */
+/* VitaSDK exposes touch structures/constants in the user header while the
+ * SceTouchForDriver stub provides the kernel import. This mirrors reVita. */
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 /*
@@ -22,6 +19,11 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 320
 #define RIGHT_ZONE_MIN_X 960
+
+/* SceCtrlForDriver export NIDs used by reVita/8BitVita for the kernel
+ * positive controller functions. */
+#define NID_KSCE_CTRL_PEEK_BUFFER_POSITIVE 0xEA1D3A34
+#define NID_KSCE_CTRL_READ_BUFFER_POSITIVE 0x9B96A1AA
 
 static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1};
 static tai_hook_ref_t ctrl_hook_ref[CTRL_HOOKS];
@@ -38,14 +40,18 @@ static int clamp_int(int value, int min_value, int max_value) {
     return value;
 }
 
+static void reset_virtual_stick(void) {
+    stick_active = 0;
+    stick_rx = TOUCH_CENTER;
+    stick_ry = TOUCH_CENTER;
+}
+
 static void update_virtual_stick(void) {
     SceTouchData touch;
     int ret = ksceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
 
     if (ret <= 0 || touch.reportNum == 0) {
-        stick_active = 0;
-        stick_rx = TOUCH_CENTER;
-        stick_ry = TOUCH_CENTER;
+        reset_virtual_stick();
         return;
     }
 
@@ -58,9 +64,7 @@ static void update_virtual_stick(void) {
     }
 
     if (report == NULL) {
-        stick_active = 0;
-        stick_rx = TOUCH_CENTER;
-        stick_ry = TOUCH_CENTER;
+        reset_virtual_stick();
         return;
     }
 
@@ -107,7 +111,7 @@ int module_start(SceSize argc, const void *args) {
         &ctrl_hook_ref[0],
         "SceCtrl",
         TAI_ANY_LIBRARY,
-        0xA9C3CED6,
+        NID_KSCE_CTRL_PEEK_BUFFER_POSITIVE,
         ctrl_peek_positive_patched
     );
 
@@ -116,7 +120,7 @@ int module_start(SceSize argc, const void *args) {
         &ctrl_hook_ref[1],
         "SceCtrl",
         TAI_ANY_LIBRARY,
-        0x67E7AB83,
+        NID_KSCE_CTRL_READ_BUFFER_POSITIVE,
         ctrl_read_positive_patched
     );
 
