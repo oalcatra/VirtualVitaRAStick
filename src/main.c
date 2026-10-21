@@ -1,37 +1,22 @@
 #include <vitasdkkern.h>
 #include <psp2kern/ctrl.h>
 #include <psp2/touch.h>
-#include <taihen.h>
 
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
-#define CTRL_HOOKS 8
-#define REQUIRED_HOOKS 4
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
-
-#define NID_PEEK_POS 0xEA1D3A34
-#define NID_READ_POS 0x9B96A1AA
-#define NID_PEEK_NEG 0x19895843
-#define NID_READ_NEG 0x8D4E0DD1
-
-/* Public SceCtrl exports used by controller-2/extended paths. Unlike the old
- * firmware offsets we tested, these NIDs are stable exports and can coexist
- * with another taiHEN hook such as reVita. */
-#define NID_PEEK_POS_2 0x15F81E8C
-#define NID_READ_POS_2 0xC4226A3E
-#define NID_PEEK_POS_EXT2 0x860BF292
-#define NID_READ_POS_EXT2 0xA7178860
-
-static SceUID ctrl_hook_uid[CTRL_HOOKS] = {-1, -1, -1, -1, -1, -1, -1, -1};
-static tai_hook_ref_t ctrl_hook_ref[CTRL_HOOKS];
+#define ANALOG_EMU_SLOT 0
+#define ANALOG_EMU_DURATION 2
 
 static int stick_active = 0;
 static int stick_center_x = 0;
 static int stick_center_y = 0;
 static unsigned char stick_rx = TOUCH_CENTER;
 static unsigned char stick_ry = TOUCH_CENTER;
+static SceUID worker_uid = -1;
+static volatile int worker_run = 1;
 
 static int clamp_int(int value, int min_value, int max_value) {
     if (value < min_value) return min_value;
@@ -80,63 +65,58 @@ static void update_virtual_stick(void) {
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
 }
 
-static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
-    update_virtual_stick();
-
-    for (int i = 0; i < count; i++) {
-        pad_data[i].rx = stick_rx;
-        pad_data[i].ry = stick_ry;
-    }
+static void apply_analog_emulation(void) {
+    /* Keep the physical left stick untouched by mirroring its neutral value in
+     * the emulation fields. The right pair is supplied for both user and kernel
+     * consumers so games using different SceCtrl read paths see the same stick. */
+    ksceCtrlSetAnalogEmulation(
+        0,
+        ANALOG_EMU_SLOT,
+        TOUCH_CENTER, TOUCH_CENTER, stick_rx, stick_ry,
+        TOUCH_CENTER, TOUCH_CENTER, stick_rx, stick_ry,
+        ANALOG_EMU_DURATION
+    );
 }
 
-#define DECL_CTRL_HOOK(name, index) \
-static int name(int port, SceCtrlData *pad_data, int count) { \
-    int ret = TAI_CONTINUE(int, ctrl_hook_ref[index], port, pad_data, count); \
-    if (ret > 0) patch_ctrl_data(pad_data, ret); \
-    return ret; \
-}
+static int analog_worker(SceSize args, void *argp) {
+    (void)args;
+    (void)argp;
 
-DECL_CTRL_HOOK(ctrl_peek_positive_patched, 0)
-DECL_CTRL_HOOK(ctrl_read_positive_patched, 1)
-DECL_CTRL_HOOK(ctrl_peek_negative_patched, 2)
-DECL_CTRL_HOOK(ctrl_read_negative_patched, 3)
-DECL_CTRL_HOOK(ctrl_peek_positive2_patched, 4)
-DECL_CTRL_HOOK(ctrl_read_positive2_patched, 5)
-DECL_CTRL_HOOK(ctrl_peek_positive_ext2_patched, 6)
-DECL_CTRL_HOOK(ctrl_read_positive_ext2_patched, 7)
-
-static void release_hooks(void) {
-    for (int i = 0; i < CTRL_HOOKS; i++) {
-        if (ctrl_hook_uid[i] >= 0) {
-            taiHookReleaseForKernel(ctrl_hook_uid[i], ctrl_hook_ref[i]);
-            ctrl_hook_uid[i] = -1;
-        }
+    while (worker_run) {
+        update_virtual_stick();
+        apply_analog_emulation();
+        ksceKernelDelayThread(4000);
     }
+
+    return 0;
 }
 
 int module_start(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
 
-    ctrl_hook_uid[0] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS, ctrl_peek_positive_patched);
-    ctrl_hook_uid[1] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[1], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS, ctrl_read_positive_patched);
-    ctrl_hook_uid[2] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[2], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_NEG, ctrl_peek_negative_patched);
-    ctrl_hook_uid[3] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[3], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_NEG, ctrl_read_negative_patched);
+    worker_run = 1;
+    reset_virtual_stick();
 
-    for (int i = 0; i < REQUIRED_HOOKS; i++) {
-        if (ctrl_hook_uid[i] < 0) {
-            release_hooks();
-            return SCE_KERNEL_START_FAILED;
-        }
+    worker_uid = ksceKernelCreateThread(
+        "VirtualVitaRAStick",
+        analog_worker,
+        0x60,
+        0x1000,
+        0,
+        0,
+        NULL
+    );
+
+    if (worker_uid < 0)
+        return SCE_KERNEL_START_FAILED;
+
+    int ret = ksceKernelStartThread(worker_uid, 0, NULL);
+    if (ret < 0) {
+        ksceKernelDeleteThread(worker_uid);
+        worker_uid = -1;
+        return SCE_KERNEL_START_FAILED;
     }
-
-    /* Best-effort hooks for the alternate controller APIs reVita also handles.
-     * Failure of one of these must never disable the known-good core plugin.
-     * Kept optional so the stable four-hook path remains the fallback. */
-    ctrl_hook_uid[4] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[4], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS_2, ctrl_peek_positive2_patched);
-    ctrl_hook_uid[5] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[5], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS_2, ctrl_read_positive2_patched);
-    ctrl_hook_uid[6] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[6], "SceCtrl", TAI_ANY_LIBRARY, NID_PEEK_POS_EXT2, ctrl_peek_positive_ext2_patched);
-    ctrl_hook_uid[7] = taiHookFunctionExportForKernel(KERNEL_PID, &ctrl_hook_ref[7], "SceCtrl", TAI_ANY_LIBRARY, NID_READ_POS_EXT2, ctrl_read_positive_ext2_patched);
 
     return SCE_KERNEL_START_SUCCESS;
 }
@@ -144,7 +124,18 @@ int module_start(SceSize argc, const void *args) {
 int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
-    release_hooks();
+
+    worker_run = 0;
+
+    if (worker_uid >= 0) {
+        ksceKernelWaitThreadEnd(worker_uid, NULL, NULL);
+        ksceKernelDeleteThread(worker_uid);
+        worker_uid = -1;
+    }
+
+    reset_virtual_stick();
+    apply_analog_emulation();
+
     return SCE_KERNEL_STOP_SUCCESS;
 }
 
