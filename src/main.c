@@ -1,7 +1,14 @@
 #include <vitasdkkern.h>
 #include <psp2kern/ctrl.h>
-#include <psp2kern/touch.h>
+#include <psp2/touch.h>
 #include <taihen.h>
+
+/*
+ * VitaSDK currently exposes the touch data structures/constants in the user
+ * header, while SceTouchForDriver still provides the kernel driver import.
+ * This prototype mirrors the approach used by reVita's VitaSDK extensions.
+ */
+int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 /*
  * VirtualVitaRAStick - first functional prototype
@@ -43,7 +50,7 @@ static void update_virtual_stick(void) {
     }
 
     const SceTouchReport *report = NULL;
-    for (int i = 0; i < touch.reportNum; i++) {
+    for (unsigned int i = 0; i < touch.reportNum; i++) {
         if (touch.report[i].x >= RIGHT_ZONE_MIN_X) {
             report = &touch.report[i];
             break;
