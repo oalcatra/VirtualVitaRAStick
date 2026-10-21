@@ -14,9 +14,13 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
  * stick. The first touch becomes the stick center; movement around that point
  * is mapped to rx/ry. Releasing the finger returns the stick to center.
  *
+ * The physical right stick is intentionally overridden. When no qualifying
+ * front-touch input is active, rx/ry are forced to the neutral value 128.
+ * This prevents drift/noise from a broken or physically missing right stick.
+ *
  * Coexistence note: reVita hooks these same SceCtrl exports. We always call
- * TAI_CONTINUE first and apply only our right-stick override afterwards. This
- * keeps every other field exactly as produced by the rest of the hook chain.
+ * TAI_CONTINUE first and alter only rx/ry afterwards, keeping every other
+ * controller field exactly as produced by the rest of the hook chain.
  */
 
 #define CTRL_HOOKS 2
@@ -87,11 +91,11 @@ static int update_virtual_stick(void) {
 }
 
 static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
-    /* Only override rx/ry while our touch stick is actually active.
-     * When idle, leave the previous hook's data untouched. This is important
-     * for coexistence with reVita and also preserves the physical right stick. */
-    if (!update_virtual_stick())
-        return;
+    /* Always own the right-stick axes. If touch is idle, update_virtual_stick()
+     * resets them to 128/128, neutralizing any drift/noise from a missing or
+     * broken physical right stick. While touch is active, stick_rx/stick_ry
+     * contain the virtual-stick position. */
+    update_virtual_stick();
 
     for (int i = 0; i < count; i++) {
         pad_data[i].rx = stick_rx;
