@@ -11,12 +11,10 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define NID_PEEK_POSITIVE 0xEA1D3A34
 #define NID_READ_POSITIVE 0x9B96A1AA
-
-/* Internal SceCtrl paths used by 8BitVita. */
-#define OFF_PEEK_POSITIVE_EXT 0x3928
-#define OFF_READ_POSITIVE_EXT 0x3BCC
 #define OFF_PEEK_POSITIVE2 0x3EF8
 #define OFF_READ_POSITIVE2 0x449C
+#define OFF_PEEK_POSITIVE_EXT2 0x4B48
+#define OFF_READ_POSITIVE_EXT2 0x4E14
 
 static SceUID hook_uid[6] = {-1, -1, -1, -1, -1, -1};
 static tai_hook_ref_t hook_ref[6];
@@ -76,14 +74,12 @@ static void update_virtual_stick(void) {
 
 static void write_virtual_stick(SceCtrlData *pad_data, int count) {
     if (pad_data == NULL || count <= 0) return;
-
     for (int i = 0; i < count; i++) {
         pad_data[i].rx = stick_rx;
         pad_data[i].ry = stick_ry;
     }
 }
 
-/* Build #32 baseline: these public hooks are responsible for refreshing touch. */
 static int peek_positive_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[0], port, pad_data, count);
     if (ret > 0) {
@@ -102,7 +98,6 @@ static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-/* Positive2 uses triggers=1 in 8BitVita. Preserve the known-good #32 behavior. */
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
     if (ret > 0) write_virtual_stick(pad_data, ret);
@@ -115,10 +110,10 @@ static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-/* New experiment: PositiveExt uses triggers=0. Refresh touch here because a game
- * may call this path directly without passing through the normal Positive hooks. */
-static int peek_positive_ext_hook(int port, SceCtrlData *pad_data, int count) {
-    int ret = TAI_CONTINUE(int, hook_ref[4], port, pad_data, count, 0);
+/* PositiveExt2 uses triggers=1 in 8BitVita. Refresh touch here so a game can
+ * call this path directly without depending on the public Positive hooks. */
+static int peek_positive_ext2_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[4], port, pad_data, count, 1);
     if (ret > 0) {
         update_virtual_stick();
         write_virtual_stick(pad_data, ret);
@@ -126,8 +121,8 @@ static int peek_positive_ext_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-static int read_positive_ext_hook(int port, SceCtrlData *pad_data, int count) {
-    int ret = TAI_CONTINUE(int, hook_ref[5], port, pad_data, count, 0);
+static int read_positive_ext2_hook(int port, SceCtrlData *pad_data, int count) {
+    int ret = TAI_CONTINUE(int, hook_ref[5], port, pad_data, count, 1);
     if (ret > 0) {
         update_virtual_stick();
         write_virtual_stick(pad_data, ret);
@@ -147,13 +142,11 @@ static void release_hooks(void) {
 int module_start(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
-
     reset_virtual_stick();
 
     hook_uid[0] = taiHookFunctionExportForKernel(
         KERNEL_PID, &hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY,
         NID_PEEK_POSITIVE, peek_positive_hook);
-
     hook_uid[1] = taiHookFunctionExportForKernel(
         KERNEL_PID, &hook_ref[1], "SceCtrl", TAI_ANY_LIBRARY,
         NID_READ_POSITIVE, read_positive_hook);
@@ -165,23 +158,19 @@ int module_start(SceSize argc, const void *args) {
 
     tai_module_info_t ctrl_info;
     ctrl_info.size = sizeof(ctrl_info);
-
     if (taiGetModuleInfoForKernel(KERNEL_PID, "SceCtrl", &ctrl_info) >= 0) {
         hook_uid[2] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[2], ctrl_info.modid, 0,
             OFF_PEEK_POSITIVE2, 1, peek_positive2_hook);
-
         hook_uid[3] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[3], ctrl_info.modid, 0,
             OFF_READ_POSITIVE2, 1, read_positive2_hook);
-
         hook_uid[4] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[4], ctrl_info.modid, 0,
-            OFF_PEEK_POSITIVE_EXT, 1, peek_positive_ext_hook);
-
+            OFF_PEEK_POSITIVE_EXT2, 1, peek_positive_ext2_hook);
         hook_uid[5] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[5], ctrl_info.modid, 0,
-            OFF_READ_POSITIVE_EXT, 1, read_positive_ext_hook);
+            OFF_READ_POSITIVE_EXT2, 1, read_positive_ext2_hook);
     }
 
     return SCE_KERNEL_START_SUCCESS;
