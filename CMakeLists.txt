@@ -11,7 +11,10 @@ endif()
 project(VirtualVitaRAStick C)
 include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -std=gnu99")
+# Kernel plugins do not use the normal Vita application crt0/main entrypoint.
+# Keep -nostdlib on the compiler/link command, matching established VitaSDK
+# kernel-plugin projects, and retain relocations for vita-elf-create.
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -O2 -std=gnu99 -nostdlib -Wl,-q")
 
 add_executable(${PROJECT_NAME}
   src/main.c
@@ -20,13 +23,13 @@ add_executable(${PROJECT_NAME}
 target_compile_definitions(${PROJECT_NAME} PRIVATE __VITA_KERNEL__)
 
 target_link_libraries(${PROJECT_NAME}
-  taihenForKernel_stub
   SceSysmemForDriver_stub
+  taihenForKernel_stub
   k
   gcc
 )
 
 vita_create_self(${PROJECT_NAME}.skprx ${PROJECT_NAME}
-  UNSAFE
   CONFIG exports.yml
+  UNSAFE
 )
