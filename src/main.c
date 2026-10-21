@@ -71,24 +71,16 @@ static void update_virtual_stick(void) {
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
 }
 
-/* SceCtrlData has multiple layouts used by normal, wide and extended readers.
- * The standard rx/ry pair is at bytes 14/15. Some games read wider controller
- * records where additional right-stick representations appear later in the
- * same record. Keep the known-good public hooks, then mirror our virtual right
- * stick into those representations without touching lx/ly or buttons. */
 static void patch_ctrl_data(SceCtrlData *pad_data, int count) {
     update_virtual_stick();
 
     for (int i = 0; i < count; i++) {
-        unsigned char *raw = (unsigned char *)&pad_data[i];
-
+        /* This intentionally runs after TAI_CONTINUE. reVita and every other
+         * hook earlier in the chain may remap buttons/left stick first; our
+         * plugin then owns only the final right-stick pair. When touch is idle
+         * this also guarantees the missing physical right stick is neutral. */
         pad_data[i].rx = stick_rx;
         pad_data[i].ry = stick_ry;
-
-        /* Do not blindly write beyond the SDK's SceCtrlData object here.
-         * Extended layouts are handled only when exposed through a compatible
-         * public hook. The standard path remains deterministic and safe. */
-        (void)raw;
     }
 }
 
