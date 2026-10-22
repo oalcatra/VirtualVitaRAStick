@@ -75,8 +75,8 @@ static void write_virtual_stick(SceCtrlData *pad_data, int count) {
         return;
 
     for (int i = 0; i < count; i++) {
-        pad_data[i].rx = stick_rx;
-        pad_data[i].ry = stick_ry;
+        pad_data[i].rx = 255;
+        pad_data[i].ry = 128;
     }
 }
 
