@@ -20,8 +20,8 @@ static tai_hook_ref_t hook_ref[4];
 static int stick_active = 0;
 static int stick_center_x = 0;
 static int stick_center_y = 0;
-static unsigned char stick_rx = TOUCH_CENTER;
-static unsigned char stick_ry = TOUCH_CENTER;
+static volatile unsigned char stick_rx = TOUCH_CENTER;
+static volatile unsigned char stick_ry = TOUCH_CENTER;
 
 static int clamp_int(int value, int min_value, int max_value) {
     if (value < min_value) return min_value;
@@ -74,19 +74,12 @@ static void write_virtual_stick(SceCtrlData *pad_data, int count) {
     if (pad_data == NULL || count <= 0)
         return;
 
-    for (int i = 0; i < count; i++) {
-        pad_data[i].rx = stick_rx;
-        pad_data[i].ry = stick_ry;
-    }
-}
-
-static void force_right_stick(SceCtrlData *pad_data, int count) {
-    if (pad_data == NULL || count <= 0)
-        return;
+    unsigned char rx = stick_rx;
+    unsigned char ry = stick_ry;
 
     for (int i = 0; i < count; i++) {
-        pad_data[i].rx = 255;
-        pad_data[i].ry = 128;
+        pad_data[i].rx = rx;
+        pad_data[i].ry = ry;
     }
 }
 
@@ -108,15 +101,18 @@ static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
+/* Positive2 is the path used by God of War. Do not call ksceTouchPeek here:
+ * nested touch reads from this path broke controller handling in build #39.
+ * Instead, consume the latest state sampled by the normal Positive hooks. */
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
-    if (ret > 0) force_right_stick(pad_data, ret);
+    if (ret > 0) write_virtual_stick(pad_data, ret);
     return ret;
 }
 
 static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[3], port, pad_data, count, 1);
-    if (ret > 0) force_right_stick(pad_data, ret);
+    if (ret > 0) write_virtual_stick(pad_data, ret);
     return ret;
 }
 
