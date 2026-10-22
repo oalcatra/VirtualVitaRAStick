@@ -4,6 +4,7 @@
 #include <taihen.h>
 
 int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
+int ksceTouchRead(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
@@ -11,11 +12,13 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 
 #define NID_PEEK_POSITIVE 0xEA1D3A34
 #define NID_READ_POSITIVE 0x9B96A1AA
+#define NID_TOUCH_PEEK 0xBAD1960B
+#define NID_TOUCH_READ 0x70C8AACE
 #define OFF_PEEK_POSITIVE2 0x3EF8
 #define OFF_READ_POSITIVE2 0x449C
 
-static SceUID hook_uid[4] = {-1, -1, -1, -1};
-static tai_hook_ref_t hook_ref[4];
+static SceUID hook_uid[6] = {-1, -1, -1, -1, -1, -1};
+static tai_hook_ref_t hook_ref[6];
 
 static int stick_active = 0;
 static int stick_center_x = 0;
@@ -35,19 +38,19 @@ static void reset_virtual_stick(void) {
     stick_ry = TOUCH_CENTER;
 }
 
-static void update_virtual_stick(void) {
-    SceTouchData touch;
-    int ret = ksceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
-
-    if (ret <= 0 || touch.reportNum == 0) {
+/* Update the cached virtual stick from touch data we already have.
+ * This never performs another touch API call, so it is safe to use
+ * from the SceTouch hooks themselves. */
+static void update_virtual_stick_from_touch(const SceTouchData *touch) {
+    if (touch == NULL || touch->reportNum == 0) {
         reset_virtual_stick();
         return;
     }
 
     const SceTouchReport *report = NULL;
-    for (unsigned int i = 0; i < touch.reportNum; i++) {
-        if (touch.report[i].x >= RIGHT_ZONE_MIN_X) {
-            report = &touch.report[i];
+    for (unsigned int i = 0; i < touch->reportNum; i++) {
+        if (touch->report[i].x >= RIGHT_ZONE_MIN_X) {
+            report = &touch->report[i];
             break;
         }
     }
@@ -68,6 +71,18 @@ static void update_virtual_stick(void) {
 
     stick_rx = (unsigned char)clamp_int(TOUCH_CENTER + (dx * 127) / TOUCH_RADIUS, 0, 255);
     stick_ry = (unsigned char)clamp_int(TOUCH_CENTER + (dy * 127) / TOUCH_RADIUS, 0, 255);
+}
+
+static void update_virtual_stick(void) {
+    SceTouchData touch;
+    int ret = ksceTouchPeek(SCE_TOUCH_PORT_FRONT, &touch, 1);
+
+    if (ret <= 0) {
+        reset_virtual_stick();
+        return;
+    }
+
+    update_virtual_stick_from_touch(&touch);
 }
 
 static void write_virtual_stick(SceCtrlData *pad_data, int count) {
@@ -101,9 +116,8 @@ static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-/* Positive2 is the path used by God of War. Do not call ksceTouchPeek here:
- * nested touch reads from this path broke controller handling in build #39.
- * Instead, consume the latest state sampled by the normal Positive hooks. */
+/* God of War uses Positive2. Positive2 must never call a touch API directly;
+ * it only consumes the cache maintained by safe controller/touch paths. */
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
     if (ret > 0) write_virtual_stick(pad_data, ret);
@@ -116,8 +130,25 @@ static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
+/* reVita hooks SceTouch separately from SceCtrl. Mirror that separation:
+ * after the real touch call returns, cache the front-panel state without
+ * issuing a nested ksceTouchPeek from Positive2. */
+static int touch_peek_hook(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs) {
+    int ret = TAI_CONTINUE(int, hook_ref[4], port, pData, nBufs);
+    if (ret > 0 && port == SCE_TOUCH_PORT_FRONT && pData != NULL)
+        update_virtual_stick_from_touch(&pData[ret - 1]);
+    return ret;
+}
+
+static int touch_read_hook(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs) {
+    int ret = TAI_CONTINUE(int, hook_ref[5], port, pData, nBufs);
+    if (ret > 0 && port == SCE_TOUCH_PORT_FRONT && pData != NULL)
+        update_virtual_stick_from_touch(&pData[ret - 1]);
+    return ret;
+}
+
 static void release_hooks(void) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         if (hook_uid[i] >= 0) {
             taiHookReleaseForKernel(hook_uid[i], hook_ref[i]);
             hook_uid[i] = -1;
@@ -162,6 +193,16 @@ int module_start(SceSize argc, const void *args) {
             KERNEL_PID, &hook_ref[3], ctrl_info.modid, 0,
             OFF_READ_POSITIVE2, 1, read_positive2_hook);
     }
+
+    /* Same kernel SceTouch exports used by reVita. These hooks are optional:
+     * failure here must not prevent the known-good controller hooks loading. */
+    hook_uid[4] = taiHookFunctionExportForKernel(
+        KERNEL_PID, &hook_ref[4], "SceTouch", TAI_ANY_LIBRARY,
+        NID_TOUCH_PEEK, touch_peek_hook);
+
+    hook_uid[5] = taiHookFunctionExportForKernel(
+        KERNEL_PID, &hook_ref[5], "SceTouch", TAI_ANY_LIBRARY,
+        NID_TOUCH_READ, touch_read_hook);
 
     return SCE_KERNEL_START_SUCCESS;
 }
