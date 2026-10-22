@@ -9,6 +9,7 @@ int ksceTouchRead(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define TOUCH_CENTER 128
 #define TOUCH_RADIUS 180
 #define RIGHT_ZONE_MIN_X 960
+#define BOTTOM_ZONE_MIN_Y 544
 
 #define NID_PEEK_POSITIVE 0xEA1D3A34
 #define NID_READ_POSITIVE 0x9B96A1AA
@@ -49,7 +50,8 @@ static void update_virtual_stick_from_touch(const SceTouchData *touch) {
 
     const SceTouchReport *report = NULL;
     for (unsigned int i = 0; i < touch->reportNum; i++) {
-        if (touch->report[i].x >= RIGHT_ZONE_MIN_X) {
+        if (touch->report[i].x >= RIGHT_ZONE_MIN_X &&
+                touch->report[i].y >= BOTTOM_ZONE_MIN_Y) {
             report = &touch->report[i];
             break;
         }
