@@ -75,8 +75,8 @@ static void write_virtual_stick(SceCtrlData *pad_data, int count) {
         return;
 
     for (int i = 0; i < count; i++) {
-        pad_data[i].rx = 255;
-        pad_data[i].ry = 128;
+        pad_data[i].rx = stick_rx;
+        pad_data[i].ry = stick_ry;
     }
 }
 
@@ -100,13 +100,19 @@ static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
 
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
-    if (ret > 0) write_virtual_stick(pad_data, ret);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
     return ret;
 }
 
 static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[3], port, pad_data, count, 1);
-    if (ret > 0) write_virtual_stick(pad_data, ret);
+    if (ret > 0) {
+        update_virtual_stick();
+        write_virtual_stick(pad_data, ret);
+    }
     return ret;
 }
 
@@ -125,8 +131,6 @@ int module_start(SceSize argc, const void *args) {
 
     reset_virtual_stick();
 
-    /* reVita explicitly forces analog sampling when SceCtrl is left in
-     * digital mode. Do the same before installing our known-good hooks. */
     int sampling_mode = SCE_CTRL_MODE_DIGITAL;
     if (ksceCtrlGetSamplingMode(&sampling_mode) >= 0 &&
             sampling_mode == SCE_CTRL_MODE_DIGITAL) {
