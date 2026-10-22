@@ -13,8 +13,8 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define NID_READ_POSITIVE 0x9B96A1AA
 #define OFF_PEEK_POSITIVE2 0x3EF8
 #define OFF_READ_POSITIVE2 0x449C
-#define OFF_PEEK_POSITIVE_EXT2 0x4B48
-#define OFF_READ_POSITIVE_EXT2 0x4E14
+#define OFF_PEEK_NEGATIVE2 0x41C8
+#define OFF_READ_NEGATIVE2 0x47F0
 
 static SceUID hook_uid[6] = {-1, -1, -1, -1, -1, -1};
 static tai_hook_ref_t hook_ref[6];
@@ -110,9 +110,10 @@ static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-/* PositiveExt2 uses triggers=1 in 8BitVita. Refresh touch here so a game can
- * call this path directly without depending on the public Positive hooks. */
-static int peek_positive_ext2_hook(int port, SceCtrlData *pad_data, int count) {
+/* Controlled experiment: hook only the Negative2 pair in addition to the
+ * known-good #32 paths. Refresh touch here in case a title calls Negative2
+ * directly without passing through the public Positive functions. */
+static int peek_negative2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[4], port, pad_data, count, 1);
     if (ret > 0) {
         update_virtual_stick();
@@ -121,7 +122,7 @@ static int peek_positive_ext2_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-static int read_positive_ext2_hook(int port, SceCtrlData *pad_data, int count) {
+static int read_negative2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[5], port, pad_data, count, 1);
     if (ret > 0) {
         update_virtual_stick();
@@ -167,10 +168,10 @@ int module_start(SceSize argc, const void *args) {
             OFF_READ_POSITIVE2, 1, read_positive2_hook);
         hook_uid[4] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[4], ctrl_info.modid, 0,
-            OFF_PEEK_POSITIVE_EXT2, 1, peek_positive_ext2_hook);
+            OFF_PEEK_NEGATIVE2, 1, peek_negative2_hook);
         hook_uid[5] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[5], ctrl_info.modid, 0,
-            OFF_READ_POSITIVE_EXT2, 1, read_positive_ext2_hook);
+            OFF_READ_NEGATIVE2, 1, read_negative2_hook);
     }
 
     return SCE_KERNEL_START_SUCCESS;
