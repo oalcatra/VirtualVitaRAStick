@@ -80,6 +80,16 @@ static void write_virtual_stick(SceCtrlData *pad_data, int count) {
     }
 }
 
+static void force_right_stick(SceCtrlData *pad_data, int count) {
+    if (pad_data == NULL || count <= 0)
+        return;
+
+    for (int i = 0; i < count; i++) {
+        pad_data[i].rx = 255;
+        pad_data[i].ry = 128;
+    }
+}
+
 static int peek_positive_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[0], port, pad_data, count);
     if (ret > 0) {
@@ -100,19 +110,13 @@ static int read_positive_hook(int port, SceCtrlData *pad_data, int count) {
 
 static int peek_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[2], port, pad_data, count, 1);
-    if (ret > 0) {
-        update_virtual_stick();
-        write_virtual_stick(pad_data, ret);
-    }
+    if (ret > 0) force_right_stick(pad_data, ret);
     return ret;
 }
 
 static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     int ret = TAI_CONTINUE(int, hook_ref[3], port, pad_data, count, 1);
-    if (ret > 0) {
-        update_virtual_stick();
-        write_virtual_stick(pad_data, ret);
-    }
+    if (ret > 0) force_right_stick(pad_data, ret);
     return ret;
 }
 
