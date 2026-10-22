@@ -13,11 +13,9 @@ int ksceTouchPeek(SceUInt32 port, SceTouchData *pData, SceUInt32 nBufs);
 #define NID_READ_POSITIVE 0x9B96A1AA
 #define OFF_PEEK_POSITIVE2 0x3EF8
 #define OFF_READ_POSITIVE2 0x449C
-#define OFF_PEEK_NEGATIVE2 0x41C8
-#define OFF_READ_NEGATIVE2 0x47F0
 
-static SceUID hook_uid[6] = {-1, -1, -1, -1, -1, -1};
-static tai_hook_ref_t hook_ref[6];
+static SceUID hook_uid[4] = {-1, -1, -1, -1};
+static tai_hook_ref_t hook_ref[4];
 
 static int stick_active = 0;
 static int stick_center_x = 0;
@@ -73,7 +71,9 @@ static void update_virtual_stick(void) {
 }
 
 static void write_virtual_stick(SceCtrlData *pad_data, int count) {
-    if (pad_data == NULL || count <= 0) return;
+    if (pad_data == NULL || count <= 0)
+        return;
+
     for (int i = 0; i < count; i++) {
         pad_data[i].rx = stick_rx;
         pad_data[i].ry = stick_ry;
@@ -110,29 +110,8 @@ static int read_positive2_hook(int port, SceCtrlData *pad_data, int count) {
     return ret;
 }
 
-/* Controlled experiment: hook only the Negative2 pair in addition to the
- * known-good #32 paths. Refresh touch here in case a title calls Negative2
- * directly without passing through the public Positive functions. */
-static int peek_negative2_hook(int port, SceCtrlData *pad_data, int count) {
-    int ret = TAI_CONTINUE(int, hook_ref[4], port, pad_data, count, 1);
-    if (ret > 0) {
-        update_virtual_stick();
-        write_virtual_stick(pad_data, ret);
-    }
-    return ret;
-}
-
-static int read_negative2_hook(int port, SceCtrlData *pad_data, int count) {
-    int ret = TAI_CONTINUE(int, hook_ref[5], port, pad_data, count, 1);
-    if (ret > 0) {
-        update_virtual_stick();
-        write_virtual_stick(pad_data, ret);
-    }
-    return ret;
-}
-
 static void release_hooks(void) {
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 4; i++) {
         if (hook_uid[i] >= 0) {
             taiHookReleaseForKernel(hook_uid[i], hook_ref[i]);
             hook_uid[i] = -1;
@@ -143,11 +122,21 @@ static void release_hooks(void) {
 int module_start(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
+
     reset_virtual_stick();
+
+    /* reVita explicitly forces analog sampling when SceCtrl is left in
+     * digital mode. Do the same before installing our known-good hooks. */
+    int sampling_mode = SCE_CTRL_MODE_DIGITAL;
+    if (ksceCtrlGetSamplingMode(&sampling_mode) >= 0 &&
+            sampling_mode == SCE_CTRL_MODE_DIGITAL) {
+        ksceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG_WIDE);
+    }
 
     hook_uid[0] = taiHookFunctionExportForKernel(
         KERNEL_PID, &hook_ref[0], "SceCtrl", TAI_ANY_LIBRARY,
         NID_PEEK_POSITIVE, peek_positive_hook);
+
     hook_uid[1] = taiHookFunctionExportForKernel(
         KERNEL_PID, &hook_ref[1], "SceCtrl", TAI_ANY_LIBRARY,
         NID_READ_POSITIVE, read_positive_hook);
@@ -159,19 +148,15 @@ int module_start(SceSize argc, const void *args) {
 
     tai_module_info_t ctrl_info;
     ctrl_info.size = sizeof(ctrl_info);
+
     if (taiGetModuleInfoForKernel(KERNEL_PID, "SceCtrl", &ctrl_info) >= 0) {
         hook_uid[2] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[2], ctrl_info.modid, 0,
             OFF_PEEK_POSITIVE2, 1, peek_positive2_hook);
+
         hook_uid[3] = taiHookFunctionOffsetForKernel(
             KERNEL_PID, &hook_ref[3], ctrl_info.modid, 0,
             OFF_READ_POSITIVE2, 1, read_positive2_hook);
-        hook_uid[4] = taiHookFunctionOffsetForKernel(
-            KERNEL_PID, &hook_ref[4], ctrl_info.modid, 0,
-            OFF_PEEK_NEGATIVE2, 1, peek_negative2_hook);
-        hook_uid[5] = taiHookFunctionOffsetForKernel(
-            KERNEL_PID, &hook_ref[5], ctrl_info.modid, 0,
-            OFF_READ_NEGATIVE2, 1, read_negative2_hook);
     }
 
     return SCE_KERNEL_START_SUCCESS;
