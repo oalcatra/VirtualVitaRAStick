@@ -2,7 +2,7 @@ name: Build VirtualVitaRAStick
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, android-ports-userhook ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -16,21 +16,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Configure
         run: cmake -S . -B build
-
       - name: Build
         run: cmake --build build --parallel
-
-      - name: Collect plugin
+      - name: Collect plugins
         run: |
           mkdir -p artifact
           cp build/VirtualVitaRAStick.skprx artifact/
-
-      - name: Upload plugin
+          cp build/VirtualVitaRAStickPorts.suprx artifact/
+      - name: Upload plugins
         uses: actions/upload-artifact@v4
         with:
           name: VirtualVitaRAStick
-          path: artifact/VirtualVitaRAStick.skprx
+          path: artifact/
           if-no-files-found: error
